@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETF 网格参数优化工具</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f7fb; color: #1f2937; padding: 20px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  .card {
+    background: #fff; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.05);
+    padding: 20px; margin-bottom: 18px;
+  }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #6b7280; font-size: 13px; margin-bottom: 18px; }
+  .form { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+  .field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 4px; }
+  .field input {
+    padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; width: 130px;
+  }
+  button {
+    padding: 9px 22px; background: #2563eb; color: #fff; border: none; border-radius: 8px;
+    font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: #1d4ed8; }
+  .status { font-size: 13px; color: #6b7280; margin-top: 12px; }
+  .cards3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .pc { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; }
+  .pc h3 { font-size: 15px; margin-bottom: 10px; color: #2563eb; }
+  .pc .row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+  .pc .row b { color: #111827; }
+  .kpi-big { font-size: 26px; font-weight: 700; color: #111827; }
+  .vol-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px,1fr)); gap: 10px; }
+  .vk { text-align: center; padding: 12px 6px; background: #f9fafb; border-radius: 8px; }
+  .vk .n { font-size: 18px; font-weight: 700; }
+  .vk .l { font-size: 12px; color: #6b7280; }
+  .charts { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+  .chart { width: 100%; height: 360px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #f0f0f0; }
+  th { color: #6b7280; font-weight: 500; }
+  @media (max-width: 780px) { .cards3 { grid-template-columns: 1fr; } .charts { grid-template-columns: 1fr; } }
+  .pos { color: #16a34a; } .neg { color: #dc2626; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ETF 网格参数优化工具</h1>
+  <div class="sub">下载历史K线 → 分析涨跌幅 → 回测并搜索<b>短线/中线/长线</b>最优网格参数（基价 / 区间触发 / 确认阈值）</div>
+
+  <div class="card">
+    <div class="form">
+      <div class="field"><label>ETF代码</label><input id="symbol" value="513310"></div>
+      <div class="field"><label>起始日期(YYYYMMDD)</label><input id="start" placeholder="可选"></div>
+      <div class="field"><label>结束日期(YYYYMMDD)</label><input id="end" placeholder="可选"></div>
+      <div class="field"><label>基价系数(MA均线倍率)</label><input id="ma_ratio" value="1"></div>
+      <div class="field"><label>网格层数</label><input id="layers" value="5"></div>
+      <button onclick="run()">开始分析</button>
+    </div>
+    <div class="status" id="status">就绪。点击"开始分析"下载K线并优化参数。</div>
+  </div>
+
+  <div class="card">
+    <div class="vol-kpis" id="volkpis"></div>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:16px;margin-bottom:12px">短线 / 中线 / 长线 最优网格参数</h2>
+    <div class="cards3" id="periodcards"></div>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:16px;margin-bottom:12px">历史K线与涨跌幅分布</h2>
+    <div class="charts">
+      <div id="chartK" class="chart"></div>
+      <div id="chartDist" class="chart"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let kchart, dchart;
+function initCharts() {
+  kchart = echarts.init(document.getElementById('chartK'));
+  dchart = echarts.init(document.getElementById('chartDist'));
+  window.addEventListener('resize', () => { kchart.resize(); dchart.resize(); });
+}
+
+function fmt(x, d=4) { return (x==null?'-':Number(x).toFixed(d)); }
+function pct(x) { return (x==null?'-':Number(x).toFixed(2)+'%'); }
+
+async function run() {
+  const status = document.getElementById('status');
+  const params = new URLSearchParams({
+    symbol: document.getElementById('symbol').value.trim() || '513310',
+    start: document.getElementById('start').value.trim(),
+    end: document.getElementById('end').value.trim(),
+    ma_ratio: document.getElementById('ma_ratio').value.trim() || '1',
+    layers: document.getElementById('layers').value.trim() || '5',
+  });
+  status.textContent = '正在下载K线数据并分析...';
+  try {
+    const res = await fetch('/api/analyze?' + params.toString());
+    const data = await res.json();
+    if (!data.ok) { status.textContent = '错误：' + (data.error||'未知'); return; }
+    status.textContent = '完成：' + data.symbol + '　' + data.volatility.n + '根日K　' +
+      data.volatility.date_start + ' ~ ' + data.volatility.date_end;
+    renderVol(data.volatility);
+    renderPeriods(data.periods);
+    renderKline(data.klines, data.periods);
+    renderDist(data.volatility);
+  } catch(e) {
+    status.textContent = '请求失败：' + e;
+  }
+}
+
+function renderVol(v) {
+  document.getElementById('volkpis').innerHTML = [
+    ['样本天数', v.n], ['日均涨跌幅', pct(v.avg_abs_ret)],
+    ['日均振幅', pct(v.avg_amplitude)], ['最大单日涨', pct(v.max_up)],
+    ['最大单日跌', pct(v.max_down)], ['最新收盘', fmt(v.last_close,3)],
+  ].map(k => `<div class="vk"><div class="n">${k[1]}</div><div class="l">${k[0]}</div></div>`).join('');
+}
+
+function renderPeriods(periods) {
+  const el = document.getElementById('periodcards');
+  el.innerHTML = periods.map(p => {
+    const b = p.backtest;
+    const rcl = b.ret_rate >= 0 ? 'pos' : 'neg';
+    return `<div class="pc">
+      <h3>${p.period}</h3>
+      <div class="row"><span>基价</span><b>${fmt(p.base)}</b></div>
+      <div class="row"><span>区间触发</span><b>${p.grid_pct.toFixed(2)}%</b></div>
+      <div class="row"><span>确认阈值</span><b>${p.confirm_pct.toFixed(2)}%</b></div>
+      <div class="row"><span>回测收益率</span><b class="${rcl}">${rcl==='pos'?'+':''}${b.ret_rate.toFixed(2)}%</b></div>
+      <div class="row"><span>交易次数</span><b>${b.trades} 次</b></div>
+      <div class="row"><span>最大持仓</span><b>${b.max_position} 份</b></div>
+      <div class="row"><span>已实现盈亏</span><b class="${b.realized>=0?'pos':'neg'}">${b.realized.toFixed(0)} 元</b></div>
+      <div class="row"><span>期末浮动盈亏</span><b class="${b.unrealized>=0?'pos':'neg'}">${b.unrealized.toFixed(0)} 元</b></div>
+    </div>`;
+  }).join('');
+}
+
+function renderKline(klines, periods) {
+  const dates = klines.map(k => k.date);
+  const ohlc = klines.map(k => [k.open, k.close, k.low, k.high]);
+  kchart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    legend: { data: ['K线'] },
+    grid: { left: 50, right: 20, top: 30, bottom: 30 },
+    xAxis: { type: 'category', data: dates, scale: true },
+    yAxis: { type: 'value', scale: true },
+    dataZoom: [{ type: 'inside', start: 60 }, { type: 'slider', start: 60 }],
+    series: [{
+      name: 'K线', type: 'candlestick', data: ohlc,
+      itemStyle: { color: '#ef4444', color0: '#22c55e', borderColor: '#ef4444', borderColor0: '#22c55e' }
+    }],
+  }, true);
+}
+
+function renderDist(v) {
+  const keys = Object.keys(v.abs_ret_percentiles).map(Number).sort((a,b)=>a-b);
+  const vals = keys.map(k => v.abs_ret_percentiles[k]);
+  dchart.setOption({
+    tooltip: { trigger: 'axis' },
+    grid: { left: 50, right: 20, top: 30, bottom: 30 },
+    xAxis: { type: 'category', data: keys.map(k=>k+'%'), axisLabel: { rotate: 40 } },
+    yAxis: { type: 'value' },
+    title: { text: '日涨跌幅绝对值 分位分布(%)', textStyle: { fontSize: 12 }, left: 10, top: 4 },
+    series: [{
+      type: 'bar', data: vals,
+      itemStyle: { color: '#2563eb', borderRadius: [3,3,0,0] },
+      label: { show: true, position: 'top', fontSize: 9 }
+    }],
+  }, true);
+}
+
+initCharts();
+run();
+</script>
+</body>
+</html>

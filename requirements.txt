@@ -1,0 +1,6 @@
+flask>=3.0
+pandas>=2.0
+numpy>=1.24
+requests>=2.31
+# 可选备用数据源（akshare 东财接口，若被网络拦截可不装，默认走腾讯接口）
+# akshare>=1.14
