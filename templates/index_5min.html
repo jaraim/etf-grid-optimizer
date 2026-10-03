@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETF 5分钟K线 网格回测（触网标记·反向确认）</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f7fb; color: #1f2937; padding: 20px;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.05); padding: 20px; margin-bottom: 18px; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #6b7280; font-size: 13px; margin-bottom: 18px; }
+  .form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+  .field label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 4px; }
+  .field input {
+    padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; width: 110px;
+  }
+  .field.wide input { width: 150px; }
+  button {
+    padding: 9px 24px; background: #2563eb; color: #fff; border: none; border-radius: 8px;
+    font-size: 14px; cursor: pointer;
+  }
+  button:hover { background: #1d4ed8; }
+  .status { font-size: 13px; color: #6b7280; margin-top: 12px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px,1fr)); gap: 10px; margin-bottom: 6px; }
+  .kpi { text-align: center; padding: 12px 6px; background: #f9fafb; border-radius: 8px; }
+  .kpi .n { font-size: 18px; font-weight: 700; }
+  .kpi .l { font-size: 12px; color: #6b7280; }
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .chart { width: 100%; height: 340px; }
+  @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
+  .pos { color: #16a34a; } .neg { color: #dc2626; }
+  .logs { max-height: 280px; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #f0f0f0; }
+  th { color: #6b7280; font-weight: 500; position: sticky; top: 0; background: #fff; }
+  .buy { color: #16a34a; font-weight: 600; }
+  .sell { color: #dc2626; font-weight: 600; }
+  .hint { font-size: 12px; color: #6b7280; margin-top: 8px; line-height: 1.6; }
+  .tag { display:inline-block; padding:1px 6px; border-radius:4px; font-size:11px; margin-left:6px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+    <a href="/" style="text-decoration:none;padding:8px 16px;border-radius:8px;background:#e5e7eb;color:#374151;font-size:14px;">📈 日K 参数优化</a>
+    <a href="/backtest5" style="text-decoration:none;padding:8px 16px;border-radius:8px;background:#2563eb;color:#fff;font-size:14px;">⏱ 5分钟 触网确认回测</a>
+  </div>
+  <h1>ETF 5分钟K线 · 触网标记 / 反向确认成交 网格回测</h1>
+  <div class="sub">
+    规则：跌到网格线只<b>标记</b>（不下单），反弹回 <b>网格线×(1+确认阈值)</b> 才买入；
+    涨到卖出网格线只标记，回落 <b>卖出网格线×(1-确认阈值)</b> 才卖出。含手续费（万1，单笔保底0.1）。
+  </div>
+
+  <div class="card">
+    <div class="form">
+      <div class="field"><label>ETF代码</label><input id="symbol" value="513180"></div>
+      <div class="field"><label>基价</label><input id="base" value="0.534"></div>
+      <div class="field"><label>网格区间(%)</label><input id="grid" value="1.0"></div>
+      <div class="field"><label>确认阈值(%)</label><input id="confirm" value="0.362"></div>
+      <div class="field"><label>每笔金额(元)</label><input id="amount" value="10000"></div>
+      <div class="field"><label>初始资金(元)</label><input id="cash" value="100000"></div>
+      <div class="field"><label>最大持仓(份)</label><input id="max_pos" value="6"></div>
+      <div class="field"><label>K线根数</label><input id="count" value="400"></div>
+      <button onclick="run()">运行回测</button>
+    </div>
+    <div class="status" id="status">就绪。点击"运行回测"下载5分钟K线并回测。</div>
+    <div class="hint" id="rangeHint"></div>
+  </div>
+
+  <div class="card">
+    <div class="kpis" id="kpis"></div>
+  </div>
+
+  <div class="card">
+    <div class="charts">
+      <div id="chartK" class="chart"></div>
+      <div id="chartN" class="chart"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:16px;margin-bottom:12px">交易日志</h2>
+    <div class="logs"><table id="logtable"><thead><tr>
+      <th>时间</th><th>动作</th><th>成交价</th><th>份额</th><th>手续费</th><th>现金余额</th>
+    </tr></thead><tbody></tbody></table></div>
+  </div>
+</div>
+
+<script>
+let kchart, nchart;
+function initCharts() {
+  kchart = echarts.init(document.getElementById('chartK'));
+  nchart = echarts.init(document.getElementById('chartN'));
+  window.addEventListener('resize', () => { kchart.resize(); nchart.resize(); });
+}
+
+function fmt(x, d=4) { return (x==null?'-':Number(x).toFixed(d)); }
+function pct(x, sign=false) {
+  const v = Number(x);
+  return (sign&&v>0?'+':'') + (v==null?'-':v.toFixed(2)+'%');
+}
+
+async function run() {
+  const status = document.getElementById('status');
+  const params = new URLSearchParams({
+    symbol: document.getElementById('symbol').value.trim() || '513180',
+    base: document.getElementById('base').value.trim() || '0.534',
+    grid: document.getElementById('grid').value.trim() || '1.0',
+    confirm: document.getElementById('confirm').value.trim() || '0.362',
+    amount: document.getElementById('amount').value.trim() || '10000',
+    cash: document.getElementById('cash').value.trim() || '100000',
+    max_pos: document.getElementById('max_pos').value.trim() || '6',
+    count: document.getElementById('count').value.trim() || '400',
+  });
+  status.textContent = '正在下载5分钟K线并回测...';
+  try {
+    const res = await fetch('/api/backtest5?' + params.toString());
+    const d = await res.json();
+    if (!d.ok) { status.textContent = '错误：' + (d.error||'未知'); return; }
+    status.textContent = '完成：' + d.symbol + '　' + d.n_bars + '根5分钟K线　基价 ' + d.base +
+      '　区间 ' + d.grid_pct + '%　确认 ' + d.confirm_pct + '%';
+    const pr = d.price_range;
+    document.getElementById('rangeHint').innerHTML =
+      '行情范围：最低 <b>' + pr.min + '</b>　最高 <b>' + pr.max + '</b>　最新 <b>' + pr.last + '</b>' +
+      '　→ 建议基价设在区间偏上沿（如 ' + pr.max + '），更容易向下触发买入。';
+    renderKpis(d);
+    renderKline(d);
+    renderEquity(d);
+    renderLogs(d.logs);
+  } catch(e) {
+    status.textContent = '请求失败：' + e;
+  }
+}
+
+function renderKpis(d) {
+  const rcl = d.total_pnl >= 0 ? 'pos' : 'neg';
+  document.getElementById('kpis').innerHTML = [
+    ['回测收益率', '<span class="'+rcl+'">'+pct(d.ret_rate,true)+'</span>'],
+    ['总盈亏', '<span class="'+rcl+'">'+(d.total_pnl>=0?'+':'')+fmt(d.total_pnl,0)+' 元</span>'],
+    ['期末总资产', fmt(d.final_asset,0)+' 元'],
+    ['买入次数', d.buys+' 次'],
+    ['卖出次数', d.sells+' 次'],
+    ['最大持仓', d.max_position+' 份'],
+    ['已实现盈亏', '<span class="'+(d.realized>=0?'pos':'neg')+'">'+fmt(d.realized,0)+' 元</span>'],
+    ['期末浮动盈亏', '<span class="'+(d.unrealized>=0?'pos':'neg')+'">'+fmt(d.unrealized,0)+' 元</span>'],
+    ['期末持仓', d.end_shares+' 份'],
+    ['剩余现金', fmt(d.remaining_cash,0)+' 元'],
+  ].map(k => `<div class="kpi"><div class="n">${k[1]}</div><div class="l">${k[0]}</div></div>`).join('');
+}
+
+function renderKline(d) {
+  const times = d.klines.map(k => k.time);
+  const ohlc = d.klines.map(k => [k.open, k.close, k.low, k.high]);
+  // 网格线（基于基价向下两层，卖出层向上）
+  const g = d.grid_pct/100;
+  const gridLines = [
+    { name:'基价', v: d.base, color:'#9ca3af', dash:[4,4] },
+    { name:'买入线1', v: d.base*(1-g), color:'#2563eb', dash:[3,3] },
+    { name:'买入线2', v: d.base*(1-g)*(1-g), color:'#2563eb', dash:[3,3] },
+  ];
+  const markLine = {
+    symbol: 'none', silent: true,
+    data: gridLines.map(gl => ({
+      yAxis: gl.v, name: gl.name,
+      lineStyle: { color: gl.color, type: gl.dash },
+      label: { formatter: gl.name+' '+gl.v.toFixed(4), position:'insideEndTop', fontSize:10 }
+    }))
+  };
+  const buyData = d.buy_points.map(p => ({ name:'买', coord: p }));
+  const sellData = d.sell_points.map(p => ({ name:'卖', coord: p }));
+  kchart.setOption({
+    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    legend: { data: ['K线','买入','卖出'] },
+    grid: { left: 50, right: 20, top: 30, bottom: 60 },
+    xAxis: { type: 'category', data: times, scale: true },
+    yAxis: { type: 'value', scale: true },
+    dataZoom: [{ type: 'inside', start: 0 }, { type: 'slider', start: 0 }],
+    series: [{
+      name: 'K线', type: 'candlestick', data: ohlc,
+      itemStyle: { color: '#ef4444', color0: '#22c55e', borderColor: '#ef4444', borderColor0: '#22c55e' },
+      markLine: markLine
+    }, {
+      name: '买入', type: 'scatter', data: buyData,
+      symbolSize: 12, itemStyle: { color: '#16a34a' }, z: 10,
+      markPoint: { data: buyData, symbol: 'pin', symbolSize: 34, itemStyle: { color: '#16a34a' },
+        label: { formatter: '买', fontSize: 11 } }
+    }, {
+      name: '卖出', type: 'scatter', data: sellData,
+      symbolSize: 12, itemStyle: { color: '#dc2626' }, z: 10,
+      markPoint: { data: sellData, symbol: 'pin', symbolSize: 34, itemStyle: { color: '#dc2626' },
+        label: { formatter: '卖', fontSize: 11 } }
+    }],
+  }, true);
+}
+
+function renderEquity(d) {
+  const init = d.init_cash;
+  nchart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['策略净值'] },
+    grid: { left: 60, right: 20, top: 30, bottom: 30 },
+    xAxis: { type: 'category', data: d.times },
+    yAxis: { type: 'value', scale: true },
+    dataZoom: [{ type: 'inside', start: 0 }],
+    series: [{
+      name: '策略净值', type: 'line', data: d.equity, showSymbol: false,
+      lineStyle: { color: '#2563eb', width: 2 },
+      areaStyle: { color: 'rgba(37,99,235,.08)' },
+      markLine: { symbol:'none', silent:true, data:[{ yAxis: init, name:'初始资金',
+        lineStyle:{ color:'#9ca3af', type:'dashed' }, label:{ formatter:'初始 '+init, position:'insideEndTop', fontSize:10 } }] }
+    }],
+  }, true);
+}
+
+function renderLogs(logs) {
+  const tb = document.querySelector('#logtable tbody');
+  tb.innerHTML = logs.map(l => {
+    const cls = l.act === '买入' ? 'buy' : 'sell';
+    return `<tr><td>${l.t}</td><td class="${cls}">${l.act}</td><td>${fmt(l.price)}</td>
+      <td>${fmt(l.shares,2)}</td><td>${fmt(l.fee,2)}</td><td>${fmt(l.cash,2)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:#9ca3af">无交易记录（价格未触发网格买入线）</td></tr>';
+}
+
+initCharts();
+run();
+</script>
+</body>
+</html>
